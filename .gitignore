@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db.bak-*
+*.log
+.garmin-assistant/
+
+# Third-party export tool — has its own git history and holds real Garmin data.
+vendor-garmin-export/

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "garmin-assistant": {
+      "command": "/Users/julianjelfs/work/garmin_mcp/.venv/bin/python",
+      "args": ["/Users/julianjelfs/work/garmin_mcp/garmin_mcp_server.py"],
+      "env": {
+        "GARMIN_DB_PATH": "/Users/julianjelfs/.garmin-assistant/garmin.db",
+        "ATHLETE_CONTEXT_PATH": "/Users/julianjelfs/.garmin-assistant/athlete_context.yaml"
+      }
+    }
+  }
+}

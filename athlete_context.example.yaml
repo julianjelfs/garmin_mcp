@@ -1,0 +1,44 @@
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ THIS IS A TEMPLATE. The server does NOT read this file.              │
+# │ The LIVE file the server reads is:                                   │
+# │     ~/.garmin-assistant/athlete_context.yaml                         │
+# │ Edit that one. This template is only for first-time setup / re-seed. │
+# └─────────────────────────────────────────────────────────────────────┘
+
+athlete:
+  name: Julian
+  sustainable_pace_s_per_km: 420 # 7:00/km
+  ftp_running_hr: null # populate when known
+
+goals:
+  - id: panama_2028
+    label: "Rat Race Panama Coast to Coast"
+    date: "2028-03-01" # approximate
+    description: "~125 mile jungle trek and packraft crossing. Multi-day expedition."
+    priority: primary
+
+injuries:
+  - id: achilles_right
+    label: "Insertional Achilles tendinopathy (right)"
+    status: active # active | resolved | monitoring
+    notes: "Strengthening with calf raises. Managed with run/walk intervals."
+    onset: "2025-01"
+  - id: achilles_left
+    label: "Mid-portion Achilles tendinopathy (left)"
+    status: active
+    notes: "Lower grade than right."
+    onset: "2025-01"
+
+constraints:
+  - "Fused right big toe — footwear fit is a consideration"
+  - "Arthritic left big toe"
+
+training:
+  current_approach: "5 min run / 1 min walk intervals"
+  weekly_volume_target_km: 50
+  long_run_target_km: 30
+  notes: "Building base for Panama. Conservative approach given bilateral Achilles."
+
+gear:
+  watch: "Garmin Instinct 3 Solar 45mm"
+  poles: "TheFitLife carbon fibre trekking poles"

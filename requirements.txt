@@ -1,0 +1,8 @@
+mcp>=1.2.0
+pyyaml>=6.0
+# The data-sync side (separate process) needs these PINNED versions.
+# garth 0.8.0 is a deprecation stub that breaks garmin-data-export
+# (the tool calls garmin.garth.dump; 0.3.x renamed it to .client — patched
+# in vendor-garmin-export/garmin_export.py line 291).
+garminconnect==0.3.6
+garth==0.7.11
