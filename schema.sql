@@ -23,6 +23,15 @@ CREATE TABLE IF NOT EXISTS daily_health (
     steps              INTEGER,
     resting_hr         INTEGER,
     hrv_status         TEXT,
+    -- HRV values from Garmin's hrvSummary (ms). last_night_avg is the nightly
+    -- reading that drives training readiness; baseline bounds give the personal
+    -- balanced range the status label is derived from.
+    hrv_last_night_avg        INTEGER,
+    hrv_weekly_avg            INTEGER,
+    hrv_last_night_5min_high  INTEGER,
+    hrv_baseline_low_upper       INTEGER,  -- below this = low
+    hrv_baseline_balanced_low    INTEGER,
+    hrv_baseline_balanced_upper  INTEGER,
     body_battery_high  INTEGER,
     body_battery_low   INTEGER,
     stress_avg         INTEGER,

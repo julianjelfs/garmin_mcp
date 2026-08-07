@@ -31,6 +31,9 @@ _ACTIVITY_COLS = (
 )
 _DAILY_HEALTH_COLS = (
     "date", "steps", "resting_hr", "hrv_status",
+    "hrv_last_night_avg", "hrv_weekly_avg", "hrv_last_night_5min_high",
+    "hrv_baseline_low_upper", "hrv_baseline_balanced_low",
+    "hrv_baseline_balanced_upper",
     "body_battery_high", "body_battery_low", "stress_avg",
     "sleep_score", "sleep_duration_s", "intensity_minutes",
 )
@@ -54,7 +57,19 @@ _WEATHER_COLS = (
 def init_db(conn: sqlite3.Connection) -> None:
     with open(SCHEMA_PATH) as f:
         conn.executescript(f.read())
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns that schema.sql's CREATE TABLE IF NOT EXISTS can't add to an
+    existing table. Safe to run every import."""
+    have = {r["name"] for r in conn.execute("PRAGMA table_info(daily_health)")}
+    for col in ("hrv_last_night_avg", "hrv_weekly_avg", "hrv_last_night_5min_high",
+                "hrv_baseline_low_upper", "hrv_baseline_balanced_low",
+                "hrv_baseline_balanced_upper"):
+        if col not in have:
+            conn.execute(f"ALTER TABLE daily_health ADD COLUMN {col} INTEGER")
 
 
 def _upsert(conn: sqlite3.Connection, table: str, cols, rows) -> int:
@@ -235,6 +250,24 @@ def _body_battery_high_low(day: dict):
     return (max(vals), min(vals)) if vals else (None, None)
 
 
+def _hrv_fields(hrv_block: dict) -> dict:
+    """Map Garmin's hrvSummary block to our daily_health hrv_* columns."""
+    summary = (hrv_block or {}).get("hrvSummary") or {}
+    status = summary.get("status")
+    if status == "NONE":  # Garmin's "no status yet" sentinel
+        status = None
+    baseline = summary.get("baseline") or {}
+    return {
+        "hrv_status": status.lower() if isinstance(status, str) else None,
+        "hrv_last_night_avg": _num(summary.get("lastNightAvg")),
+        "hrv_weekly_avg": _num(summary.get("weeklyAvg")),
+        "hrv_last_night_5min_high": _num(summary.get("lastNight5MinHigh")),
+        "hrv_baseline_low_upper": _num(baseline.get("lowUpper")),
+        "hrv_baseline_balanced_low": _num(baseline.get("balancedLow")),
+        "hrv_baseline_balanced_upper": _num(baseline.get("balancedUpper")),
+    }
+
+
 def _parse_daily_health(section, intensity_by_date: dict) -> list[dict]:
     rows = []
     if not isinstance(section, dict):
@@ -248,15 +281,11 @@ def _parse_daily_health(section, intensity_by_date: dict) -> list[dict]:
         scores = sleep_dto.get("sleepScores") or {}
         sleep_score = (scores.get("overall") or {}).get("value") if scores else None
         bb_high, bb_low = _body_battery_high_low(day)
-        hrv_status = ((day.get("Heart Rate Variability") or {})
-                      .get("hrvSummary") or {}).get("status")
-        if hrv_status == "NONE":  # Garmin's "no status yet" sentinel
-            hrv_status = None
         rows.append({
             "date": day_str,
             "steps": _num(ds.get("totalSteps")),
             "resting_hr": _num(hr.get("restingHeartRate")),
-            "hrv_status": hrv_status.lower() if isinstance(hrv_status, str) else None,
+            **_hrv_fields(day.get("Heart Rate Variability")),
             "body_battery_high": bb_high,
             "body_battery_low": bb_low,
             "stress_avg": _num(stress.get("avgStressLevel")),
@@ -513,6 +542,39 @@ def backfill_activity_details(conn: sqlite3.Connection, cache_dir: str | None = 
             "zones": n_z, "weather": n_w, "cache_dir": cache_dir}
 
 
+def backfill_hrv(conn: sqlite3.Connection, daily_cache_dir: str | None = None) -> dict:
+    """Backfill hrv_* columns from the per-day JSON cache
+    (<export_dir>/.cache/daily/<YYYY-MM-DD>.json, key 'hrv'). The cache keeps
+    every day ever fetched, so this recovers HRV values for dates imported
+    before those columns existed. Only touches hrv columns; other daily_health
+    fields are preserved. Idempotent."""
+    daily_cache_dir = daily_cache_dir or os.path.join(
+        os.path.dirname(_default_cache_dir()), "daily"
+    )
+    n = 0
+    for path in sorted(glob(os.path.join(daily_cache_dir, "????-??-??.json"))):
+        day = os.path.basename(path)[:-len(".json")]
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        fields = _hrv_fields(data.get("hrv") or {})
+        if fields["hrv_last_night_avg"] is None and fields["hrv_status"] is None:
+            continue
+        cols = list(fields)
+        assign = ", ".join(f"{c} = excluded.{c}" for c in cols)
+        conn.execute(
+            f"INSERT INTO daily_health (date, {', '.join(cols)}) "
+            f"VALUES (?{', ?' * len(cols)}) "
+            f"ON CONFLICT(date) DO UPDATE SET {assign}",
+            [day] + [fields[c] for c in cols],
+        )
+        n += 1
+    conn.commit()
+    return {"days": n, "daily_cache_dir": daily_cache_dir}
+
+
 def parse_export(export_path: str, update: bool = False):
     """Parse a garmin-data-export into row lists for every table.
 
@@ -554,6 +616,9 @@ def main(argv=None) -> int:
                    help="fill streams/splits/zones/weather for DB activities "
                         "missing them, from the per-activity cache; skips the "
                         "export-text parse entirely")
+    p.add_argument("--backfill-hrv", action="store_true",
+                   help="backfill hrv_* columns for all days present in the "
+                        "per-day cache; skips the export-text parse entirely")
     p.add_argument("--db", default=os.environ.get("GARMIN_DB_PATH", DEFAULT_DB_PATH))
     p.add_argument("--export-path", default=os.environ.get("GARMIN_EXPORT_PATH", ""))
     args = p.parse_args(argv)
@@ -565,6 +630,15 @@ def main(argv=None) -> int:
         conn.close()
         print(f"Backfill: {res['candidates']} candidates -> {res['streams']} streams, "
               f"{res['splits']} splits, {res['zones']} zones, {res['weather']} weather")
+        return 0
+
+    if args.backfill_hrv:
+        conn = connect_rw(args.db)
+        init_db(conn)
+        res = backfill_hrv(conn)
+        update_sync_meta(conn)
+        conn.close()
+        print(f"HRV backfill: {res['days']} days from {res['daily_cache_dir']}")
         return 0
 
     conn = connect_rw(args.db)

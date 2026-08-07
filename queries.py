@@ -21,6 +21,9 @@ ACTIVITY_COLUMNS = (
 )
 DAILY_HEALTH_COLUMNS = (
     "date", "steps", "resting_hr", "hrv_status",
+    "hrv_last_night_avg", "hrv_weekly_avg", "hrv_last_night_5min_high",
+    "hrv_baseline_low_upper", "hrv_baseline_balanced_low",
+    "hrv_baseline_balanced_upper",
     "body_battery_high", "body_battery_low", "stress_avg",
     "sleep_score", "sleep_duration_s", "intensity_minutes",
 )

@@ -95,8 +95,10 @@ def get_training_load(weeks: int = 8) -> dict:
 
 @mcp.tool()
 def get_daily_health(days: int = 14) -> dict:
-    """Per-day health metrics for the last N days: HRV, Body Battery, resting
-    HR, steps, sleep, stress. Missing values are returned as null."""
+    """Per-day health metrics for the last N days: HRV (status label plus
+    values in ms — last-night avg, weekly avg, 5-min high, personal baseline
+    bounds), Body Battery, resting HR, steps, sleep, stress. Missing values
+    are returned as null."""
     return _db_call(lambda c: queries.daily_health(c, days))
 
 
