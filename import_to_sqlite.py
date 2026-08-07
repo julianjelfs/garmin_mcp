@@ -132,8 +132,9 @@ def update_sync_meta(conn: sqlite3.Connection) -> None:
 #   Activities       list of {summary, detail, splits, ...}; we read .summary
 #   Training Metrics dict; training_readiness[0] gives score + recoveryTime
 #
-# Reality on this device: training_status (acute/chronic load) is empty, HRV is
-# absent from daily health, and sleep is sparse. Those columns stay NULL.
+# Reality on this device: training_status (acute/chronic load) is empty, so
+# those columns stay NULL. HRV status comes from Daily Health's
+# "Heart Rate Variability" -> hrvSummary.status (lowercased).
 
 import json
 from glob import glob
@@ -247,11 +248,15 @@ def _parse_daily_health(section, intensity_by_date: dict) -> list[dict]:
         scores = sleep_dto.get("sleepScores") or {}
         sleep_score = (scores.get("overall") or {}).get("value") if scores else None
         bb_high, bb_low = _body_battery_high_low(day)
+        hrv_status = ((day.get("Heart Rate Variability") or {})
+                      .get("hrvSummary") or {}).get("status")
+        if hrv_status == "NONE":  # Garmin's "no status yet" sentinel
+            hrv_status = None
         rows.append({
             "date": day_str,
             "steps": _num(ds.get("totalSteps")),
             "resting_hr": _num(hr.get("restingHeartRate")),
-            "hrv_status": None,  # absent from this device's export
+            "hrv_status": hrv_status.lower() if isinstance(hrv_status, str) else None,
             "body_battery_high": bb_high,
             "body_battery_low": bb_low,
             "stress_avg": _num(stress.get("avgStressLevel")),
