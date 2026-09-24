@@ -1,47 +1,94 @@
-# Garmin Training Assistant — Local MCP Server
+# Garmin Training Assistant MCP server
 
-Local, read-only MCP server giving Claude Desktop access to your Garmin fitness
-data and athlete context. See `spec.md` for the PRD and
-`plans/garmin-training-assistant.md` for the phased build plan.
+A read-only MCP server that gives Claude my Garmin data and athlete context. It
+runs on the Raspberry Pi and is published to the tailnet, so any Claude client on
+a tailnet device can use it whether or not the laptop is on.
 
-## Components
+```
+Claude Code / Claude Desktop (on a tailnet device)
+      │  https://pi.tail50bfbf.ts.net:8447/mcp
+      ▼
+Raspberry Pi ("pi", 192.168.68.69)
+  tailscale serve :8447 ──> 127.0.0.1:8020  garmin-mcp.service (streamable HTTP)
+  garmin-sync.timer    06:00 and 14:00, sync.sh: export --update, import, backfill
+  garmin-backup.timer  04:10, SQLite online backup to ~/garmin-backups, keeps 14
+```
 
-| File | Role |
+`spec.md` has the PRD and `plans/garmin-training-assistant.md` the original build
+plan.
+
+## Where things live on the Pi
+
+| Path | What |
 |------|------|
-| `garmin_mcp_server.py` | Read-only MCP server (stdio). Never crashes on launch. |
-| `import_to_sqlite.py`  | Writer. Idempotent upsert importer. **Parse step stubbed pending Phase 0.** |
-| `schema.sql`           | SQLite schema (activities, daily_health, training_metrics, sync_meta). |
-| `common.py` / `queries.py` | Shared helpers + pure query functions (unit-testable). |
-| `seed.py`              | Synthetic data — exercise the server without a real export. |
-| `test_smoke.py`        | Smoke tests for the query layer. |
+| `~/garmin_mcp` | This repo, cloned from GitHub. `.venv` inside it. |
+| `~/garmin_mcp/vendor-garmin-export` | The export tool and its cache (`export/`). Not in git; copied across once. It has a local patch to `garmin_export.py`. |
+| `~/.garmin-assistant/garmin.db` | The database. Only `sync.sh` writes to it. |
+| `~/.garmin-assistant/athlete_context.yaml` | Goals, injuries, gear. The server reads it on every call. |
+| `~/.garminconnect/garmin_tokens.json` | Garmin auth tokens, valid about a year. |
+| `~/garmin_mcp/sync.log` | Sync output. The server logs to the journal. |
 
-## Status
+## Connecting Claude
 
-- **Read side (server + all 7 tools): working.** Verified end-to-end over stdio.
-- **Write side (export parser): stubbed.** Blocked on Phase 0 — run the export on
-  the real account, map raw fields to schema columns, then implement
-  `parse_export()` in `import_to_sqlite.py`.
+Claude Code, once per machine:
 
-## Quick start (with synthetic data)
+```bash
+claude mcp add --scope user --transport http garmin-assistant https://pi.tail50bfbf.ts.net:8447/mcp
+```
+
+Claude Desktop's config file only takes stdio servers, so it goes through
+`mcp-remote`. See `claude_desktop_config.example.json`.
+
+The claude.ai web and mobile apps can't use it. Their custom connectors call the
+server from Anthropic's cloud, which isn't on the tailnet.
+
+## Day to day
+
+`scripts/garmin` drives the Pi over SSH:
+
+```
+garmin                 status: server, data freshness, sync, backups, Pi health
+garmin context         edit the athlete context on the Pi (validated before it replaces the old one)
+garmin sync            run a Garmin sync now
+garmin sync-log [n]    show the sync log
+garmin logs [n]        follow the server log
+garmin deploy          after pushing code: pull on the Pi, reinstall, restart
+garmin backup          take a backup now and pull it to ~/Backups/garmin-mcp
+```
+
+To change code, commit and push, then `garmin deploy`. The Pi pulls from GitHub,
+so it won't see uncommitted work.
+
+If the Garmin tokens expire, the export fails and the sync log says so. Log in
+again on the Pi:
+
+```bash
+garmin ssh
+cd garmin_mcp/vendor-garmin-export && ../.venv/bin/python garmin_export.py --login
+```
+
+## Development
+
+The server still speaks stdio by default, so it runs locally against a seeded
+database:
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python seed.py --db /tmp/garmin.db
+GARMIN_DB_PATH=/tmp/garmin.db ./.venv/bin/python garmin_mcp_server.py --check
 
-# Seed a DB so the server has data to serve
-./.venv/bin/python seed.py --db ~/.garmin-assistant/garmin.db
-
-# Validate setup (DB, tables, row counts, YAML)
-GARMIN_DB_PATH=~/.garmin-assistant/garmin.db \
-ATHLETE_CONTEXT_PATH=$PWD/athlete_context.example.yaml \
-  ./.venv/bin/python garmin_mcp_server.py --check
-
-# Run the smoke tests
-./.venv/bin/python test_smoke.py
+./.venv/bin/python test_smoke.py    # query layer and importer
+./.venv/bin/python test_deploy.py   # HTTP transport, backup script, sync.sh
 ```
 
-Then copy `claude_desktop_config.example.json` into your Claude Desktop config
-(edit the paths), and restart Claude Desktop.
+`--http` serves streamable HTTP on `127.0.0.1:$GARMIN_MCP_PORT` (default 8020).
+It only accepts loopback Host headers plus whatever is in
+`GARMIN_MCP_ALLOWED_HOSTS`. Anything else gets a 421, which keeps DNS rebinding
+out. On the Pi that variable holds the tailnet name, because `tailscale serve`
+passes the Host header through.
+
+`mcp` is pinned to 1.28.1. Version 2 renamed `FastMCP` and the server won't import.
 
 ## Tools
 
@@ -60,29 +107,21 @@ Then copy `claude_desktop_config.example.json` into your Claude Desktop config
 Every response carries `freshness` (`latest_data_date`, `days_since_sync`). List
 tools cap ~200 rows and return `total_matched` + `truncated`.
 
-## Editing your athlete context
+## Setting up from scratch
 
-Two files, easy to confuse:
-
-| File | Read by server? | Edit this? |
-|------|-----------------|------------|
-| `~/.garmin-assistant/athlete_context.yaml` | **YES** (every tool call) | ✅ this one |
-| `athlete_context.example.yaml` (in repo) | no — template only | ✗ leave alone |
+`deploy/install-pi.sh` is safe to re-run and never touches the data. It installs
+the dependencies and systemd units, starts everything, waits on `/health` and adds
+the `tailscale serve` rule. The data goes across by hand, once:
 
 ```bash
-open -e ~/.garmin-assistant/athlete_context.yaml   # or: code / vim / nano
+ssh julian_jelfs@pi.local 'git clone https://github.com/julianjelfs/garmin_mcp.git'
+sqlite3 ~/.garmin-assistant/garmin.db ".backup '/tmp/garmin.db'"   # never cp a live database
+scp /tmp/garmin.db ~/.garmin-assistant/athlete_context.yaml julian_jelfs@pi.local:.garmin-assistant/
+scp -p ~/.garminconnect/garmin_tokens.json julian_jelfs@pi.local:.garminconnect/
+rsync -az vendor-garmin-export/ julian_jelfs@pi.local:garmin_mcp/vendor-garmin-export/
+ssh julian_jelfs@pi.local 'cd garmin_mcp && ./deploy/install-pi.sh'
 ```
 
-Changes take effect on the **next query** — the server re-reads the file each
-call, no restart. Keep it valid YAML; a parse error comes back as a clear tool
-error, not a crash. Both files carry a banner header saying which is which.
-
-## Real-data setup flow (once Phase 0 is done)
-
-1. `pip install garminconnect garth pyyaml mcp`
-2. `python garmin_export.py --login` (one-time MFA auth)
-3. `python garmin_export.py --all --compact` (initial history)
-4. `python import_to_sqlite.py` (parse export into DB)
-5. Edit `~/.garmin-assistant/athlete_context.yaml`
-6. Register the server in `claude_desktop_config.json`, restart Claude Desktop
-7. Schedule daily (Phase 6): `python garmin_export.py --update && python import_to_sqlite.py --update`
+The server moved off the laptop on 2026-09-24. The laptop's launchd agent is
+disabled (`~/Library/LaunchAgents/com.julian.garmin-sync.plist.disabled`) and its
+last database is at `~/.garmin-assistant/garmin.db.bak-laptop-20260924`.

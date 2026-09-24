@@ -23,7 +23,7 @@ case "${1:-status}" in
 			else
 				printf "health    : NOT responding\n"
 			fi
-			cd garmin_mcp && ./.venv/bin/python garmin_mcp_server.py --check | grep latest_data_date | sed "s/^ */data      : /"
+			cd garmin_mcp && ./.venv/bin/python garmin_mcp_server.py --check 2>/dev/null | grep latest_data_date | sed "s/^ */data      : /"
 			printf "last sync : %s\n" "$(grep -h "^=====" sync.log 2>/dev/null | tail -1 | tr -d "=" | sed "s/^ *sync *//")"
 			printf "next sync : %s\n" "$(systemctl list-timers garmin-sync --no-pager 2>/dev/null | awk "NR==2 {print \$1, \$2, \$3}")"
 			n=$(ls -1 ~/garmin-backups/garmin-*.db 2>/dev/null | wc -l | tr -d " ")
@@ -72,7 +72,7 @@ case "${1:-status}" in
 
 	backup)
 		echo "==> taking a backup on the Pi"
-		on_pi "sudo systemctl start garmin-backup && sudo journalctl -u garmin-backup -n 3 --no-pager | tail -2"
+		on_pi "sudo systemctl start garmin-backup && sudo journalctl -u garmin-backup -n 8 -o cat --no-pager | grep -E \"backed up|wrote|keeping|failed|holds\""
 		echo "==> pulling it here"
 		bash "$ROOT/deploy/pull-backups.sh"
 		;;
