@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+# Control the Garmin MCP server, which runs on the Pi. Everything here drives that
+# machine over SSH; nothing in this repo runs the server on the laptop any more.
+set -euo pipefail
+
+PI="${GARMIN_PI_HOST:-julian_jelfs@pi.local}"
+REMOTE="garmin_mcp"
+MCP_URL="https://pi.tail50bfbf.ts.net:8447/mcp"
+CONTEXT="~/.garmin-assistant/athlete_context.yaml"
+ROOT="$(cd "$(dirname "$(readlink "${BASH_SOURCE[0]}" || echo "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+on_pi() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$PI" "$@"; }
+
+case "${1:-status}" in
+	url) echo "$MCP_URL" ;;
+	ssh) exec ssh "$PI" ;;
+
+	status)
+		on_pi '
+			printf "server    : %s\n" "$(systemctl is-active garmin-mcp)"
+			if curl -sf -m 3 http://127.0.0.1:8020/health >/dev/null; then
+				printf "health    : responding on 127.0.0.1:8020\n"
+			else
+				printf "health    : NOT responding\n"
+			fi
+			cd garmin_mcp && ./.venv/bin/python garmin_mcp_server.py --check | grep latest_data_date | sed "s/^ */data      : /"
+			printf "last sync : %s\n" "$(grep -h "^=====" sync.log 2>/dev/null | tail -1 | tr -d "=" | sed "s/^ *sync *//")"
+			printf "next sync : %s\n" "$(systemctl list-timers garmin-sync --no-pager 2>/dev/null | awk "NR==2 {print \$1, \$2, \$3}")"
+			n=$(ls -1 ~/garmin-backups/garmin-*.db 2>/dev/null | wc -l | tr -d " ")
+			if [ "$n" = 0 ]; then
+				printf "backups   : none yet\n"
+			else
+				printf "backups   : %s, newest %s\n" "$n" "$(ls -1t ~/garmin-backups/garmin-*.db | head -1 | xargs -r basename)"
+			fi
+			printf "disk      : %s free\n" "$(df -h / | awk "NR==2 {print \$4}")"
+			printf "cpu temp  : %.1fC\n" "$(awk "{print \$1/1000}" /sys/class/thermal/thermal_zone0/temp)"
+			printf "uptime    : %s\n" "$(uptime -p)"
+		'
+		echo "mcp url   : $MCP_URL"
+		;;
+
+	logs)     on_pi "sudo journalctl -u garmin-mcp -n ${2:-40} -f" ;;
+	sync)     on_pi "sudo systemctl start garmin-sync && tail -n 6 $REMOTE/sync.log" ;;
+	sync-log) on_pi "tail -n ${2:-40} $REMOTE/sync.log" ;;
+
+	start)   on_pi "sudo systemctl start garmin-mcp"; echo "started" ;;
+	stop)    on_pi "sudo systemctl stop garmin-mcp"; echo "stopped" ;;
+	restart) on_pi "sudo systemctl restart garmin-mcp"; echo "restarted" ;;
+
+	context)
+		# The server re-reads the file on every call, so an edit lands with no restart.
+		tmp="$(mktemp -t athlete_context).yaml"
+		scp -q -o BatchMode=yes "$PI:$CONTEXT" "$tmp"
+		"${EDITOR:-vi}" "$tmp"
+		scp -q -o BatchMode=yes "$tmp" "$PI:$CONTEXT.new"
+		# Validate on the Pi, with the server's own yaml, before replacing the live copy.
+		on_pi "$REMOTE/.venv/bin/python -c 'import sys, yaml; yaml.safe_load(open(sys.argv[1]))' $CONTEXT.new && mv $CONTEXT.new $CONTEXT" \
+			|| { echo "not valid YAML; left the Pi's copy alone. Your edit is in $tmp" >&2; exit 1; }
+		rm -f "$tmp"
+		echo "saved to the Pi"
+		;;
+
+	deploy)
+		if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+			echo "warning: uncommitted changes here; the Pi pulls from GitHub and will not see them" >&2
+		fi
+		echo "==> pulling code on the Pi"
+		on_pi "cd $REMOTE && git pull -q && git log --oneline -1"
+		echo "==> installing"
+		on_pi "cd $REMOTE && ./deploy/install-pi.sh"
+		;;
+
+	backup)
+		echo "==> taking a backup on the Pi"
+		on_pi "sudo systemctl start garmin-backup && sudo journalctl -u garmin-backup -n 3 --no-pager | tail -2"
+		echo "==> pulling it here"
+		bash "$ROOT/deploy/pull-backups.sh"
+		;;
+
+	pull) bash "$ROOT/deploy/pull-backups.sh" ;;
+
+	*)
+		cat <<'USAGE'
+garmin: the Garmin MCP server, running on the Pi
+
+  garmin                 status: server, data freshness, sync, backups, Pi health
+  garmin url             print the MCP URL for Claude
+  garmin context         edit the athlete context on the Pi
+  garmin sync            run a Garmin sync now
+  garmin sync-log [n]    show the sync log
+  garmin logs [n]        follow the server log
+  garmin deploy          after pushing code: pull on the Pi, reinstall, restart
+  garmin backup          take a backup now and pull it to this laptop
+  garmin pull            pull existing backups to this laptop
+  garmin ssh             shell onto the Pi
+  garmin start|stop|restart
+USAGE
+		;;
+esac

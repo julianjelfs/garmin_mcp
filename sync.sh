@@ -1,12 +1,17 @@
 #!/bin/bash
 # Daily Garmin sync: pull new data, parse into SQLite. Idempotent.
-# Run by launchd (see com.julian.garmin-sync.plist) or manually.
+# Run by garmin-sync.timer on the Pi, by the trigger_sync tool, or manually.
 set -uo pipefail
 
-DIR="/Users/julianjelfs/work/garmin_mcp"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$DIR/.venv/bin/python"
-DB="$HOME/.garmin-assistant/garmin.db"
-LOG="$DIR/sync.log"
+DB="${GARMIN_DB_PATH:-$HOME/.garmin-assistant/garmin.db}"
+LOG="${GARMIN_SYNC_LOG:-$DIR/sync.log}"
+
+# The timer and trigger_sync can overlap; two exports writing one cache would
+# corrupt it, so the second run waits for the first.
+exec 9>"$DIR/.sync.lock"
+flock 9 2>/dev/null || true
 
 echo "===== sync $(date '+%Y-%m-%d %H:%M:%S') =====" >> "$LOG"
 

@@ -1,0 +1,11 @@
+# One nightly backup run. Driven by garmin-backup.timer.
+[Unit]
+Description=Back up the Garmin MCP database and athlete context
+Documentation=https://github.com/julianjelfs/garmin_mcp
+
+[Service]
+Type=oneshot
+User=julian_jelfs
+ExecStart=/home/julian_jelfs/garmin_mcp/deploy/backup.sh
+StandardOutput=journal
+StandardError=journal

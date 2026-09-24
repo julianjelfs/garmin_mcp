@@ -1,0 +1,11 @@
+# One Garmin sync: export --update, import, backfill. Driven by garmin-sync.timer.
+[Unit]
+Description=Sync Garmin data into the MCP database
+Documentation=https://github.com/julianjelfs/garmin_mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=julian_jelfs
+ExecStart=/home/julian_jelfs/garmin_mcp/sync.sh

@@ -8,3 +8,4 @@ __pycache__/
 
 # Third-party export tool — has its own git history and holds real Garmin data.
 vendor-garmin-export/
+.sync.lock

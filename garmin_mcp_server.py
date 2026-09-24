@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Garmin Training Assistant — read-only MCP server (stdio transport).
+"""Garmin Training Assistant — read-only MCP server.
 
-Exposes the local SQLite DB and the athlete context YAML as MCP tools for
-Claude Desktop. The server is read-only and must never crash on launch, so the
+Exposes the local SQLite DB and the athlete context YAML as MCP tools. Speaks
+stdio by default; with --http it serves streamable HTTP on loopback, which is
+how it runs on the Pi behind `tailscale serve`. The server is read-only and must never crash on launch, so the
 DB is opened lazily per call and every failure is returned as a structured
 error inside the tool response.
 
 Run as MCP server:   python garmin_mcp_server.py
+Run over HTTP:       python garmin_mcp_server.py --http
 Validate setup:      python garmin_mcp_server.py --check
 """
 
@@ -18,6 +20,9 @@ import subprocess
 import sys
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 import queries
 from common import (
@@ -35,7 +40,36 @@ SYNC_SCRIPT = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "sync.sh"),
 )
 
+HTTP_PORT = int(os.environ.get("GARMIN_MCP_PORT", "8020"))
+# Host headers the HTTP transport accepts besides loopback, comma-separated. On
+# the Pi this is the tailnet name, because `tailscale serve` passes it through.
+EXTRA_ALLOWED_HOSTS = os.environ.get("GARMIN_MCP_ALLOWED_HOSTS", "")
+
 mcp = FastMCP("garmin-assistant")
+
+
+def configure_http(port: int = HTTP_PORT, extra_hosts: str = EXTRA_ALLOWED_HOSTS) -> None:
+    """Set up the streamable HTTP transport: loopback only, stateless, and a
+    Host allowlist so DNS rebinding can't reach it through a browser."""
+    hosts = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"]
+    for h in (x.strip() for x in extra_hosts.split(",")):
+        if h:
+            hosts += [h, f"{h}:*"]
+    mcp.settings.host = "127.0.0.1"
+    mcp.settings.port = port
+    # Stateless: a service restart doesn't strand clients holding a session id.
+    mcp.settings.stateless_http = True
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"{scheme}://{h}" for scheme in ("http", "https") for h in hosts],
+    )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_: Request) -> JSONResponse:
+    """Liveness for install scripts and `scripts/garmin status`."""
+    return JSONResponse({"ok": True, "db": db_exists(DB_PATH)})
 
 
 def _db_call(fn) -> dict:
@@ -242,4 +276,8 @@ def run_check() -> int:
 if __name__ == "__main__":
     if "--check" in sys.argv[1:]:
         sys.exit(run_check())
-    mcp.run()
+    if "--http" in sys.argv[1:]:
+        configure_http()
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run()

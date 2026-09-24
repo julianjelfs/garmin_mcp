@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Garmin MCP database backup
+
+[Timer]
+# Twenty minutes after the triads backup, so two SQLite copies never overlap.
+OnCalendar=*-*-* 04:10:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

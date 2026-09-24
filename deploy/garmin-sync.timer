@@ -1,0 +1,15 @@
+[Unit]
+Description=Twice-daily Garmin sync
+
+[Timer]
+# 06:00 catches overnight activities early. 14:00 re-runs after the watch has
+# synced and Garmin has finalised the night's sleep score and training readiness,
+# which are stubs at 06:00. The importer is idempotent, so the second run backfills.
+OnCalendar=*-*-* 06:00:00
+OnCalendar=*-*-* 14:00:00
+# Catch up after a power cut.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

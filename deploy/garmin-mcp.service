@@ -1,0 +1,27 @@
+# The Garmin MCP server, as a systemd service on the Pi.
+#
+# Binds loopback only. `tailscale serve` publishes it to the tailnet at
+# https://pi.tail50bfbf.ts.net:8447/mcp; nothing else can reach it.
+# Install with deploy/install-pi.sh; don't edit the copy in /etc.
+
+[Unit]
+Description=Garmin MCP server
+Documentation=https://github.com/julianjelfs/garmin_mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=julian_jelfs
+WorkingDirectory=/home/julian_jelfs/garmin_mcp
+Environment=GARMIN_MCP_PORT=8020
+Environment=GARMIN_MCP_ALLOWED_HOSTS=pi.tail50bfbf.ts.net
+ExecStart=/home/julian_jelfs/garmin_mcp/.venv/bin/python garmin_mcp_server.py --http
+Restart=always
+RestartSec=2
+# SD cards die of writes. Journal only.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
